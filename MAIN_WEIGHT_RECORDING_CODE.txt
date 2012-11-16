@@ -1,0 +1,542 @@
+SET MESSAGES OFF
+SET ERROR MESSAGE 337 OFF
+--SET WAIT 10
+--rsm Dec 31 Add 10k and Rewind Cone logic
+--rsm Nov 2009 spool weight program
+--rsm Dec 28, 2009 updates to allow continuous weighing
+--rsm Jan 28 2011 new variable to toggle color
+If vFormColor = 1 then
+   SET VAR vFormColor integer = 0
+ELSE
+    SET VAR vFormColor integer = 1
+ENDIF
+
+LABEL START
+SET VAR vNet = (.vGross - .vTare)
+-- PROPERTY cNet REFRESHLIST 'TRUE'
+
+SET VAR vNet REAL
+IF vNet > 0 THEN
+--SET LOCK WEIGHTRECORD ON
+UPDATE WEIGHTRECORD set NETWEIGHT = .vNet where RECORDNO = .vRecno
+--SET LOCK WEIGHTRECORD OFF
+ENDIF
+IF vNet <= 0 THEN
+SET VAR vResponse TEXT = 'Zero or less than zero WEIGHT'
+SET VAR vEndKey TEXT = NULL
+DIALOG 'The net weight is zero or less than zero - correct brand-capacity? .......................................' vResponse=26 vEndKey 1 +
+CAPTION 'The net weight is zero or less than zero - check tare weight......................................' ICON SERIOUS +
+OPTION TITLE_FONT_COLOR GREEN +
+|TITLE_BACK_COLOR WHITE +
+|TITLE_FONT_NAME ARIAL +
+|TITLE_BOLD OFF +
+|WINDOW_BACK_COLOR WHITE +
+|BUTTON_OK_CAPTION &Continue +
+|BUTTON_CANCEL_CAPTION C&ancel +
+|BUTTON_YES_COLOR WHITE +
+|BUTTON_NO_COLOR WHITE +
+|BUTTON_YES_FONT_COLOR BLACK +
+|BUTTON_NO_FONT_COLOR RED +
+|BUTTONS_SHOW_GLYPH OFF
+RETURN
+
+  GOTO LEAVE
+ENDIF
+
+SET VAR vGross REAL
+--UPDATE WEIGHTRECORD set TOTALWEIGHT = .vGross where RECORDNO = .vRecno
+-- SELECT INVENTORYWT,YARDSPERGRAM,NETYARDS,CONES,NETCONES,FLOORWT  into vInvWt
+-- INDIC vY1, vYdsGm INDIC vY2, vNetYds INDIC vY3, vCones INDIC vY4, vNetCones INDIC vY5,
+-- vFloorWt INDIC vY6 from YARNMASTER where MFG = .vMfg and YNO = .vYarno
+-- add rounding of yards remaining on cones and add assignment to conelevels counters
+-- rsm nov 16, 2009
+-- rsm Dec17 add 10k 5k 1k partial cone levels to code
+IF vLength <> 0 THEN
+SELECT DENIER, PLY  +
+ into vDenier INDIC vYden, vPly INDIC vYPly +
+ FROM BRAND WHERE MFG = .vMfg AND BRAND = .vBrand AND FULLLENGTH = .vLength
+ENDIF
+IF vLength = 0 THEN
+SELECT DENIER, PLY  +
+ into vDenier INDIC vYden, vPly INDIC vYPly +
+ FROM BRAND WHERE MFG = .vMfg AND BRAND = .vBrand AND LIMIT = 1
+ENDIF
+--SET LOCK YARNMASTER ON
+SELECT  INVENTORYWT, CONES, NETCONES,FLOORWT, WT_COUNTER +
+ into  vInvWt INDIC vY1, vCones INDIC vY4, vNetCones INDIC vY5,  +
+  vFloorWt INDIC vY6, vCounter INDIC vCtr +
+ FROM YARNMASTER WHERE MFG = .vMfg AND BRAND = .vBrand AND YNO = .vYarno
+-- ENDIF
+
+SET VAR vDenPly = (.vDenier * .vPly)
+SET VAR vGmsMeter REAL = (.vDenPly/9000)
+SET VAR vLength REAL
+--Set VAR vNetConeWt REAL = (.vGmsMeter * .vLength)
+
+SET VAR vInvWt REAL
+if vLocation = 'W' then
+SET VAR vInvWt = (.vInvWt + .vNet)
+SET VAR vCones = (.vCones + 1)
+ENDIF
+
+ if vLocation = 'F' then
+SET VAR vInvWt = (.vInvWt - .vNet)
+SET VAR vCones = (.vCones - 1)
+ENDIF
+
+SET VAR vYdsGm REAL
+SET VAR vNetYds = (.vYdsGm * .vInvWt)
+SET VAR vNetYds REAL
+
+set VAR vConeNetYds REAL
+SET VAR vConeNetYds = (.vNet/.vGmsMeter)
+SET VAR vConeNetYds INT
+
+SET VAR vNetConeAdd REAL = (.vConeNetYds/5000)
+If vLocation = 'W' THEN
+SET VAR vNetCones = (.vNetCones + .vNetConeAdd)
+ ENDIF
+If vLocation = 'F' THEN
+SET VAR vNetCones = (.vNetCones - .vNetConeAdd)
+ ENDIF
+
+SET VAR vSuffix TEXT
+
+IF vLength = 0 then
+  SET VAR vSuffix = 'S'
+  GOTO PROCESSUPDATE
+ENDIF
+set var vPercentFull REAL = .vConeNetYds/.vLength
+If vPercentFull < .25 then
+    SET  VAR vSuffix = '1'
+    GOTO PROCESSUPDATE
+ENDIF
+If vPercentFull < .5 then
+    SET  VAR vSuffix = '2'
+    GOTO PROCESSUPDATE
+ENDIF
+If vPercentFull < .75 then
+    SET  VAR vSuffix = '3'
+    GOTO PROCESSUPDATE
+ENDIF
+ SET  VAR vSuffix = '4'
+
+LABEL PROCESSUPDATE
+
+set var vColNm = (.vPrefix + .vSuffix)
+
+SELECT &vCOlNm into vColVal  FROM YARNMASTER WHERE MFG = .vMfg AND BRAND = .vBrand AND YNO = .vYarno
+
+If vLocation ='W' THEN
+
+  SET VAR vColVal = .vColVal + 1
+--  SET LOCK YARNMASTER ON
+  UPDATE YARNMASTER set &vColNm  = .vColVal where MFG = .vMfg  AND BRAND = .vBrand and YNO = .vYarno
+--  SET LOCK YARNMASTER OFF
+ENDIF
+
+If vLocation ='F' THEN
+
+  SET VAR vColVal = .vColVal - 1
+--   SET LOCK YARNMASTER ON
+  UPDATE YARNMASTER set &vColNm  = .vColVal where MFG = .vMfg  AND BRAND = .vBrand and YNO = .vYarno
+--    SET LOCK YARNMASTER OFF
+ENDIF
+
+
+LABEL CONEDONE
+
+-- update rounded cone count by determining range 1 - 5 for cone and incremeting appropriate counter
+-- update net cone count by dividing netyards by 5000
+
+SET VAR vNewNetCones INT
+SET VAR vNetYds INT
+-- SET LOCK YARNMASTER ON
+UPDATE YARNMASTER set INVENTORYWT  = .vInvWt where MFG = .vMfg AND BRAND = .vBrand and YNO = .vYarno
+UPDATE YARNMASTER set CONES  = .vCones where MFG = .vMfg AND BRAND = .vBrand and YNO = .vYarno
+UPDATE YARNMASTER set NETCONES  = .vNetCones   where MFG = .vMfg AND BRAND = .vBrand and YNO = .vYarno
+SET VAR vCounter = (.vCounter + 1)
+UPDATE YARNMASTER SET WT_COUNTER = .vCounter where MFG = .vMfg AND BRAND = .vBrand and YNO = .vYarno
+UPDATE YARNMASTER SET LAST_WT = .#NOW where MFG = .vMfg AND BRAND = .vBrand and YNO = .vYarno
+--SET LOCK YARNMASTER OFF
+{UPDATE YARNMASTER set CONELEVEL5_500  = .vConeLevel5_500 where MFG = .vMfg and YNO = .vYarno
+UPDATE YARNMASTER set CONELEVEL6  = .vConeLevel6 where MFG = .vMfg and YNO = .vYarno
+UPDATE YARNMASTER set CONELEVEL7  = .vConeLevel7 where MFG = .vMfg and YNO = .vYarno
+UPDATE YARNMASTER set CONELEVEL8  = .vConeLevel8 where MFG = .vMfg and YNO = .vYarno
+UPDATE YARNMASTER set CONELEVEL9  = .vConeLevel9 where MFG = .vMfg and YNO = .vYarno
+UPDATE YARNMASTER set CONELEVEL10  = .vConeLevel10 where MFG = .vMfg and YNO = .vYarno
+UPDATE YARNMASTER set CONELEVEL1_1000  = .vConeLevel1_1000 where MFG = .vMfg and YNO = .vYarno
+UPDATE YARNMASTER set CONELEVEL1_500  = .vConeLevel1_500 where MFG = .vMfg and YNO = .vYarno
+}
+--rsm Dec21, 2009 Code to delete nearest weightrecord out of inventory when cone is going out to the floor.
+SET VAR vLength INT
+If vLocation = 'F' THEN
+      SET ERROR MESSAGE 2059 OFF
+      SET VAR vRecNoDelete INT = NULL
+      select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT = .vNet AND LIMIT = 1
+      IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      if .vRecNoDelete IS NULL THEN
+         select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .01) and NETWEIGHT < (.vNet + .01) AND LIMIT = 1
+      IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+         select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .02) and NETWEIGHT < (.vNet + .02) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .03) and NETWEIGHT < (.vNet + .03) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .04) and NETWEIGHT < (.vNet + .04) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .05) and NETWEIGHT < (.vNet + .05) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .06) and NETWEIGHT < (.vNet + .06) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .07) and NETWEIGHT < (.vNet + .07) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .07) and NETWEIGHT < (.vNet + .07) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .08) and NETWEIGHT < (.vNet + .08) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .09) and NETWEIGHT < (.vNet + .09) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .1) and NETWEIGHT < (.vNet + .1) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .11) and NETWEIGHT < (.vNet + .11) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .12) and NETWEIGHT < (.vNet + .12) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .13) and NETWEIGHT < (.vNet + .13) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .14) and NETWEIGHT < (.vNet + .14) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .15) and NETWEIGHT < (.vNet + .15) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .16) and NETWEIGHT < (.vNet + .16) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .17) and NETWEIGHT < (.vNet + .17) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .18) and NETWEIGHT < (.vNet + .18) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .19) and NETWEIGHT < (.vNet + .19) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .2) and NETWEIGHT < (.vNet + .20) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .21) and NETWEIGHT < (.vNet + .21) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .21) and NETWEIGHT < (.vNet + .21) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .22) and NETWEIGHT < (.vNet + .22) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .25) and NETWEIGHT < (.vNet + .25) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .3) and NETWEIGHT < (.vNet + .3) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .35) and NETWEIGHT < (.vNet + .35) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .4) and NETWEIGHT < (.vNet + .4) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .45) and NETWEIGHT < (.vNet + .45) AND LIMIT = 1
+           IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .5) and NETWEIGHT < (.vNet + .5) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .55) and NETWEIGHT < (.vNet + .55) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+       IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .6) and NETWEIGHT < (.vNet + .6) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .65) and NETWEIGHT < (.vNet + .65) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+            IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .7) and NETWEIGHT < (.vNet + .7) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+                  IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .75) and NETWEIGHT < (.vNet + .75) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+                  IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .8) and NETWEIGHT < (.vNet + .8) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+                  IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .85) and NETWEIGHT < (.vNet + .85) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+                  IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .9) and NETWEIGHT < (.vNet + .9) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+                  IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - .95) and NETWEIGHT < (.vNet + .95) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+                  IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1) and NETWEIGHT < (.vNet + 1) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.05) and NETWEIGHT < (.vNet + 1.05) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.1) and NETWEIGHT < (.vNet + 1.1) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+      GOTO DOUP
+      ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.15) and NETWEIGHT < (.vNet + 1.15) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+               GOTO DOUP
+            ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.2) and NETWEIGHT < (.vNet + 1.2) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+               GOTO DOUP
+            ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.25) and NETWEIGHT < (.vNet + 1.25) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+             GOTO DOUP
+            ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.3) and NETWEIGHT < (.vNet + 1.3) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+             GOTO DOUP
+            ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.35) and NETWEIGHT < (.vNet + 1.35) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+               GOTO DOUP
+            ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.4) and NETWEIGHT < (.vNet + 1.4) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+             GOTO DOUP
+            ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.45) and NETWEIGHT < (.vNet + 1.45) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+             GOTO DOUP
+            ENDIF
+      ENDIF
+     IF .vRecNoDelete IS NULL THEN
+          select RECORDNO into vRecNoDelete from WEIGHTRECORD where MFG = .vMfg AND BRAND = .vBrand AND YNO =.vYarno AND CONECAP = .vLength AND LOCATION = 'W' and NETWEIGHT > (.vNet - 1.5) and NETWEIGHT < (.vNet + 1.5) AND LIMIT = 1
+            IF SQLCODE = 0 THEN
+             GOTO DOUP
+            ENDIF
+      ENDIF
+      IF .vRecNoDelete IS NULL THEN
+           Insert into xCeptionRecord (RECORDNO, MFG, BRAND, YNO, NETWEIGHT, WEIGHTDATE, LOCATION,CONECAP,FULLCONE) VALUES (.vRecno,.vMfg,.vBrand, .vYarno, .vNet, .#DATE, 'R' , .vLength, 'N')
+           GOTO SKIPUP
+      ENDIF
+LABEL DOUP
+-- SET LOCK WEIGHTRECORD ON
+      UPDATE WEIGHTRECORD set LOCATION = 'R' where RECORDNO = .vRecNoDelete
+-- SET LOCK WEIGHTRECORD OFF
+      SET ERROR MESSAGE 2059 ON
+ENDIF
+
+LABEL SKIPUP
+--SET LOCK WEIGHTRECORD ON
+Insert into WeightRecord (MFG, BRAND, YNO, WEIGHTDATE, LOCATION,CONECAP,FULLCONE, USERNUM ) VALUES (.vMfg,.vBrand, .vYarno, .#DATE, .vLocation, .vLength, 'N', .vSession)
+select max (recordno) into vRecno INDIC iRec from WEIGHTRECORD WHERE USERNUM = .vSession AND  WEIGHTDATE = .#DATE
+--SET LOCK WEIGHTRECORD OFF
+CLEAR VARIABLES  vRecnoChk, vNetChk,  vNet, vCounter
+SET VAR vGross = 0.00
+PROPERTY cGross TEXTVALUE '0.00'
+PROPERTY cGross SET_FOCUS 'TRUE'
+--SET VAR vGrossChk = .vGross
+SET VAR vPlay = (GETVAL('PlayAndWait','c:\windows\media\Ringout.wav'))
+SET VAR vPlay1 = (GETVAL('PlayAndWait','c:\windows\media\Ringout.wav'))
+--rsm jan 28 2011 new code to toggle weight field color
+IF vFormColor = 0 THEN
+PROPERTY cGross FONT_ITALIC 'TRUE'
+PROPERTY fWeight COLOR 'WHITE'
+ELSE
+PROPERTY cGross FONT_ITALIC 'FALSE'
+PROPERTY fWeight COLOR 'MINT GREEN'
+ENDIF
+
+RETURN
+
+SET VARIABLE vlast = (LASTKEY(0))
+
+ IF vlast = '[Esc]' THEN
+     GOTO LEAVE
+ ENDIF
+ GOTO START
+
+LABEL LEAVE
+--select max (recordno) into vRecnoChk from WEIGHTRECORD
+select NETWEIGHT into vNetChk INDIC v1 from WEIGHTRECORD where RECORDNO = .vRecnoChk
+IF vlast '[Esc]' THEN
+--SET LOCK WEIGHTRECORD ON
+ DELETE FROM WEIGHTRECORD where NETWEIGHT is NULL AND USERNUM = .vSession AND  WEIGHTDATE = .#DATE
+-- SET LOCK WEIGHTRECORD OFF
+ENDIF
+If vNetChk is NULL then
+--SET LOCK WEIGHTRECORD ON
+DELETE FROM WEIGHTRECORD where NETWEIGHT is NULL AND USERNUM = .vSession  AND  WEIGHTDATE = .#DATE
+--SET LOCK WEIGHTRECORD OFF
+CLEAR VARIABLES vDen, vPly, vRecnoChk, vNetChk,  vNet, vTare,  vMfg, vBrand, vYarno, vRecno
+ENDIF
+CLEAR VARIABLES vDen, vPly, vRecnoChk, vNetChk,  vNet, vTare,  vMfg, vBrand, vYarno, vRecno
+SET VAR vGross = 0.00
+PROPERTY cGross TEXTVALUE '0.00'
+PROPERTY cGross SET_FOCUS 'TRUE'
+
+CLOSEWINDOW YARNWT
+SET TRACE OFF
+RETURN
