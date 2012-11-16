@@ -1,0 +1,30 @@
+DROP CURSOR EMAIL
+DELETE FROM REORDER
+Declare email cursor for select MFG, BRAND, YNO, NETCONES , REORDERCOUNT FROM YARNMASTER  WHERE MFG = 'N'
+OPEN  EMAIL
+LABEL REORD
+FETCH EMAIL INTO vMfg INDIC iMfg, vBrand, INDIC iBrand, vYarno INDIC iYarno, vNetCones INDIC iNet, vReorderCount INDIC iReord
+IF SQLCODE <> 0 THEN
+   GOTO ENDLOOP
+ENDIF
+IF vNetCones < vReorderCount then
+     INSERT INTO REORDER VALUES (.vMfg, .vBrand,.vYarno,.vNetCones,.vReorderCount)
+ENDIF
+GOTO REORD
+LABEL ENDLOOP
+SET VAR vDay = ((FORMAT(#DATE,'MM'))& '_'&(FORMAT(#DATE,'DD')))
+SET VAR vEmail = 'geek423@gmail.com'
+SET VAR vExtra = 'robert.stanley.martin@gmail.com'
+SET VAR vfilename = ('REORDENAR'+.vDay +'.PDF')
+Set var vsubj text = ('Informe de Reordinar ' + .vDay)
+  PRINT REORDERA
+  OPTION PDF|FILENAME .vFileName +
+  |EMAIL ON +
+  |EMAIL_TO_LIST &vEmail +
+  |EMAIL_CC_LIST &vExtra +
+  |EMAIL_BCC_LIST rob.martin@abemblem.com +
+  |EMAIL_FROM_NAME Reordenar +
+  |EMAIL_FROM_ADDRESS rob.martin@abemblem.com +
+  |EMAIL_SUBJECT &vsubj +
+  |EMAIL_DELETE_AFTER_SEND OFF +
+  |EMAIL_SHOW_DIALOG ON
